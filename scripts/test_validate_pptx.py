@@ -202,6 +202,80 @@ class ValidatePptxTests(unittest.TestCase):
             missing_fields,
         )
 
+    def test_visual_qa_delivery_requires_render_comparison_artifacts(self):
+        module = load_validator()
+        manifest = {
+            "slides": [
+                {
+                    "slide": 1,
+                    "qa_expectations": {"visual_qa_required": True},
+                }
+            ]
+        }
+        visual_qa = {
+            "slides": [
+                {
+                    "slide": 1,
+                    "surface_system_match": True,
+                    "main_chart_semantics_match": True,
+                    "visual_semantics_preserved": True,
+                    "editable_information_layer_pass": True,
+                    "spatial_registration_pass": True,
+                    "curve_fidelity_pass": True,
+                    "label_collision_pass": True,
+                    "text_overflow_pass": True,
+                    "container_overflow_pass": True,
+                    "continuous_text_flow_pass": True,
+                    "table_semantic_typography_pass": True,
+                    "table_density_pass": True,
+                    "blueprint_background_not_used": True,
+                    "deliverable_allowed": True,
+                    "visual_differences": [],
+                }
+            ]
+        }
+        issues = module.validate_visual_qa(visual_qa, manifest)
+        codes = {item["code"] for item in issues}
+        self.assertIn("BLUEPRINT_RENDER_MISSING", codes)
+        self.assertIn("PPT_RENDER_MISSING", codes)
+        self.assertIn("SIDE_BY_SIDE_COMPARISON_MISSING", codes)
+
+    def test_visual_qa_true_fields_require_evidence(self):
+        module = load_validator()
+        manifest = {
+            "slides": [
+                {
+                    "slide": 1,
+                    "qa_expectations": {"visual_qa_required": True},
+                }
+            ]
+        }
+        visual_qa = {
+            "slides": [
+                {
+                    "slide": 1,
+                    "surface_system_match": True,
+                    "main_chart_semantics_match": True,
+                    "visual_semantics_preserved": True,
+                    "editable_information_layer_pass": True,
+                    "spatial_registration_pass": True,
+                    "curve_fidelity_pass": True,
+                    "label_collision_pass": True,
+                    "text_overflow_pass": True,
+                    "container_overflow_pass": True,
+                    "continuous_text_flow_pass": True,
+                    "table_semantic_typography_pass": True,
+                    "table_density_pass": True,
+                    "blueprint_background_not_used": True,
+                    "deliverable_allowed": False,
+                }
+            ]
+        }
+        issues = module.validate_visual_qa(visual_qa, manifest)
+        self.assertTrue(
+            any(item["code"] == "VISUAL_PASS_WITHOUT_EVIDENCE" for item in issues)
+        )
+
     def test_table_prose_cannot_be_registered_as_micro_label(self):
         module = load_validator()
         metrics = {
@@ -255,6 +329,29 @@ class ValidatePptxTests(unittest.TestCase):
         self.assertIn("MANIFEST_CONTAINER_OVERFLOW_INCOMPLETE", codes)
         self.assertIn("MANIFEST_CONTINUOUS_TEXT_FLOW_FAILED", codes)
         self.assertIn("MANIFEST_TABLE_DENSITY_INCOMPLETE", codes)
+
+    def test_visual_semantics_requires_blueprint_reconstruction_plan(self):
+        module = load_validator()
+        metrics = {
+            "pictures": 0,
+            "max_picture_area_ratio": 0,
+            "native_text_shapes": 1,
+        }
+        manifest_entry = {
+            "slide": 1,
+            "expected_pictures": 0,
+            "image_assets": [],
+            "qa_expectations": {
+                "visual_semantics_required": True,
+            },
+        }
+        issues = module.validate_manifest_slide(manifest_entry, metrics, 1)
+        self.assertTrue(
+            any(
+                item["code"] == "MANIFEST_BLUEPRINT_RECONSTRUCTION_PLAN_MISSING"
+                for item in issues
+            )
+        )
 
 
 if __name__ == "__main__":

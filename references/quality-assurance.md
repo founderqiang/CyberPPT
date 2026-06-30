@@ -31,6 +31,7 @@ python scripts/validate_pptx.py path/to/deck.pptx --manifest path/to/slide_manif
 - 每页文本形状数量和信息单元数量；
 - 图片资产说明，并解释每张图片为什么需要保留为图片、是否牺牲可编辑性；
 - `slide_manifest.json` 是否覆盖全部页面，且 `expected_pictures`、`image_assets`、`text_objects`、`native_components`、`qa_expectations` 字段完整；
+- 当 `qa_expectations.visual_semantics_required = true` 时，manifest 是否包含完整 `blueprint_reconstruction_plan`，并覆盖蓝图路径、画布、背景色、表面系统、版式区域、页眉页脚、SO WHAT、主图语义、密度、锚点、原生重建对象和允许视觉资产；
 - manifest 中每个 `text_objects.role` 是否属于固定 Typography Scale（`C0`, `T1-T14`），`font_size_pt` 是否达到对应下限；
 - manifest 中触发精确追踪的组件是否包含 `trace_required: true`、`trace_method`、`trace_reference_crop`、`trace_debug_artifact` 和资产路径；
 - manifest 中触发精确追踪的核心曲线是否记录 `trace_curves`、`point_count` 和最小采样要求；
@@ -41,6 +42,8 @@ python scripts/validate_pptx.py path/to/deck.pptx --manifest path/to/slide_manif
 - manifest 中表格文字是否包含 `table_text_objects`，并按语义角色登记 Typography Scale；表格正文、行动项、风险项、解释句和建议句不得登记为 T11；
 - manifest 或 `visual_qa_gate.json` 是否包含表格密度检查；表格不得因字号过小、行高/列宽失衡或内容压缩出现大面积空白和阅读重心塌陷；
 - 是否提供 `visual_qa_gate.json`，且覆盖全部交付页面；
+- `visual_qa_gate.json` 中 `deliverable_allowed=true` 的页面是否提供 `blueprint_render_path`、`ppt_render_path`、`side_by_side_comparison_path` 和 `visual_differences`；
+- `visual_qa_gate.json` 中每个为 `true` 的视觉字段是否有 `evidence`；证据可以是存在的文件路径，也可以是结构化检查记录对象，不得只留空字符串或口头声明；
 - 有图表但缺少解读或含义块的页面。
 
 静态检查是启发式的。报告干净不代表 PPT 视觉上一定合格。
@@ -123,6 +126,9 @@ python scripts/validate_pptx.py path/to/deck.pptx --manifest path/to/slide_manif
 - 表格正文、行动项、风险项、解释句、建议句、长项目符号或完整短句登记为 `T11`，视为表格语义字号失败，不得交付确认。
 - 表格字号、行高、列宽或换行导致单元格大面积空白、阅读重心塌陷或页面显空，视为表格密度失败，不得交付确认。
 - 缺少 `visual_qa_gate.json`、视觉 QA 关键字段缺失、任一关键项为 `false` 或 `deliverable_allowed=false`，均不得交付确认。
+- `deliverable_allowed=true` 但缺少已批准蓝图图、当前 PPT 渲染图、side-by-side 对照图或 `visual_differences`，视为 Critical，不得交付确认。
+- 任一视觉 QA 字段为 `true` 但没有对应 `evidence`，视为 Critical，不得交付确认。
+- `qa_expectations.visual_semantics_required = true` 但缺少完整 `blueprint_reconstruction_plan`，视为 Critical，不得生成或交付。
 
 ## 图片资产判定
 
@@ -199,6 +205,11 @@ python scripts/validate_pptx.py path/to/deck.pptx --manifest path/to/slide_manif
 
 | 字段 | 要求 |
 |---|---|
+| `blueprint_render_path` | 已批准蓝图图路径，必须能打开 |
+| `ppt_render_path` | 当前 PPT 渲染图路径，必须能打开 |
+| `side_by_side_comparison_path` | 蓝图与 PPT 渲染图的并排对照图路径，必须能打开 |
+| `visual_differences` | 逐项差异记录；没有差异也必须写空数组 |
+| `evidence` | 每个为 `true` 的视觉字段对应的证据；可为存在的文件路径或结构化检查记录对象 |
 | `surface_system_match` | 是否匹配蓝图页面表面系统 |
 | `main_chart_semantics_match` | 主图语义是否匹配蓝图 |
 | `visual_semantics_preserved` | 是否保留蓝图关键视觉语义，没有因可编辑性被简化或降级 |
@@ -216,6 +227,8 @@ python scripts/validate_pptx.py path/to/deck.pptx --manifest path/to/slide_manif
 
 任一关键字段为 `false` 时，`deliverable_allowed` 必须为 `false`。结构 QA 通过、PPTX 可打开、`pictures=0` 或文字可编辑，均不能覆盖视觉 QA 失败。`editable_information_layer_pass=true` 不能覆盖 `visual_semantics_preserved=false`；`visual_semantics_preserved=true` 也不能覆盖 `editable_information_layer_pass=false`。`label_collision_pass=true` 不能覆盖 `spatial_registration_pass=false`。
 
+`visual_qa_gate.json` 不是自我声明。`deliverable_allowed=true` 前必须有蓝图图、PPT 渲染图、side-by-side 对照图和差异记录。每个写成 `true` 的字段都必须能追溯到证据；没有证据就不能写 `true`，也不能交付确认。
+
 ## manifest 判定门
 
 逐页确认前必须同时检查 manifest 和 PPTX。以下是硬判定，不允许解释性绕过：
@@ -232,6 +245,8 @@ python scripts/validate_pptx.py path/to/deck.pptx --manifest path/to/slide_manif
 | `font_size_pt` 低于角色下限 | 失败，必须调版或精简文字 |
 | 简单图表/表格/SO WHAT 未登记为 `native_components` | 失败，必须补登记并原生重建 |
 | `dual_gate_required` 或 `visual_semantics_required` 缺失/不为 true | 失败，必须在 manifest 中声明并执行双硬门槛 |
+| `visual_semantics_required = true` 但缺少 `blueprint_reconstruction_plan` | 失败，必须先拆解蓝图再生成 PPTX |
+| `blueprint_reconstruction_plan` 缺少蓝图路径、画布、背景色、表面系统、版式区域、页眉页脚、SO WHAT、主图语义、密度、锚点、原生重建目标或允许视觉资产 | 失败，必须补齐拆解记录 |
 | `trace_required = true` 但缺少追踪方法、裁切图、debug 图或资产路径 | 失败，必须补齐追踪产物 |
 | `trace_required = true` 但缺少 `geometry_analysis` 或 `rendered_crop_comparison` | 失败，必须先完成几何拆解和局部渲染对照 |
 | 曲线/异形图表没有登记 `trace_required` 却被近似重建 | 失败，必须回到追踪流程 |
@@ -245,6 +260,8 @@ python scripts/validate_pptx.py path/to/deck.pptx --manifest path/to/slide_manif
 | `table_density_check_required = true` 但缺少表格密度结果 | 失败，必须补 manifest 或 visual QA 记录 |
 | 表格正文语义登记为 `T11` | 失败，必须改为 `T7/T10` 并调整表格布局 |
 | `visual_qa_gate.json` 缺失或 `deliverable_allowed=false` | 失败，不得交付确认 |
+| `deliverable_allowed=true` 但缺少蓝图图、PPT 渲染图、side-by-side 对照图或差异记录 | 失败，不得交付确认 |
+| 视觉字段为 `true` 但没有字段级 `evidence` | 失败，不得交付确认 |
 
 ## 严重程度
 
@@ -274,9 +291,12 @@ python scripts/validate_pptx.py path/to/deck.pptx --manifest path/to/slide_manif
 
 - 可编辑 PPTX；
 - 全页渲染预览；
+- 已批准蓝图图、当前 PPT 渲染图和 side-by-side 对照图；
 - 结构 QA 摘要；
 - `visual_qa_gate.json` 路径与逐页关键项结果；
 - `slide_manifest.json` 路径与 manifest 覆盖摘要；
+- 每页 `blueprint_reconstruction_plan` 覆盖摘要；
+- 每个视觉 QA true 字段的证据摘要或证据路径；
 - 密度 QA 摘要，包括文本形状数量、图片资产数量、整页图片检查和需要叙事复查的页面；
 - 复杂视觉资产摘要，说明哪些区域以图片保留、哪些地方因此牺牲了可编辑性；
 - 简单图表和基础信息层摘要，确认折线/柱状/坐标轴/标签/对比条/SO WHAT/页眉页脚是否原生重建；

@@ -56,6 +56,20 @@ GEOMETRY_ANALYSIS_REQUIRED_FIELDS = (
     "reconstruction_decision",
 )
 CORE_CURVE_MIN_POINTS = 16
+BLUEPRINT_RECONSTRUCTION_REQUIRED_FIELDS = (
+    "blueprint_path",
+    "canvas_size",
+    "background_color_sample",
+    "surface_system",
+    "layout_regions",
+    "header_footer_system",
+    "so_what_region",
+    "main_chart_semantics",
+    "density_targets",
+    "anchor_targets",
+    "native_rebuild_targets",
+    "allowed_visual_assets",
+)
 VISUAL_QA_REQUIRED_FIELDS = (
     "surface_system_match",
     "main_chart_semantics_match",
@@ -121,12 +135,20 @@ STRICT_FAILURE_CODES = {
     "MANIFEST_TABLE_DENSITY_CHECK_MISSING",
     "MANIFEST_TABLE_DENSITY_FAILED",
     "MANIFEST_TABLE_DENSITY_INCOMPLETE",
+    "MANIFEST_BLUEPRINT_RECONSTRUCTION_PLAN_MISSING",
+    "MANIFEST_BLUEPRINT_RECONSTRUCTION_PLAN_INCOMPLETE",
     "VISUAL_QA_NOT_PROVIDED",
     "VISUAL_QA_INVALID",
     "VISUAL_QA_SLIDE_MISSING",
     "VISUAL_QA_FIELD_MISSING",
     "VISUAL_QA_CHECK_FAILED",
     "VISUAL_QA_DELIVERY_BLOCKED",
+    "VISUAL_QA_EVIDENCE_MISSING",
+    "VISUAL_QA_EVIDENCE_FILE_NOT_FOUND",
+    "BLUEPRINT_RENDER_MISSING",
+    "PPT_RENDER_MISSING",
+    "SIDE_BY_SIDE_COMPARISON_MISSING",
+    "VISUAL_PASS_WITHOUT_EVIDENCE",
 }
 PLACEHOLDER_RE = re.compile(
     r"\b(?:TODO|TBD)\b|Lorem ipsum|Click to add|单击此处添加",
@@ -293,6 +315,30 @@ def validate_manifest_slide(
                 slide=slide_number,
             )
         )
+    else:
+        reconstruction_plan = entry.get("blueprint_reconstruction_plan")
+        if not isinstance(reconstruction_plan, dict):
+            warnings.append(
+                issue(
+                    "MANIFEST_BLUEPRINT_RECONSTRUCTION_PLAN_MISSING",
+                    "visual_semantics_required=true requires a blueprint_reconstruction_plan before PPTX generation.",
+                    slide=slide_number,
+                )
+            )
+        else:
+            missing_plan_fields = [
+                field
+                for field in BLUEPRINT_RECONSTRUCTION_REQUIRED_FIELDS
+                if reconstruction_plan.get(field) in (None, "", [], {})
+            ]
+            if missing_plan_fields:
+                warnings.append(
+                    issue(
+                        "MANIFEST_BLUEPRINT_RECONSTRUCTION_PLAN_INCOMPLETE",
+                        f"blueprint_reconstruction_plan is missing: {', '.join(missing_plan_fields)}.",
+                        slide=slide_number,
+                    )
+                )
     if qa.get("all_key_text_editable") is not True:
         warnings.append(
             issue(
@@ -737,6 +783,7 @@ def validate_manifest_slide(
 def validate_visual_qa(
     visual_qa: dict[str, Any] | None,
     manifest: dict[str, Any] | None,
+    visual_qa_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     warnings: list[dict[str, Any]] = []
     if manifest is None or not manifest_requires_visual_qa(manifest):
@@ -811,6 +858,58 @@ def validate_visual_qa(
                     slide=slide_number,
                 )
             )
+
+        if entry.get("deliverable_allowed") is True:
+            delivery_artifacts = (
+                ("blueprint_render_path", "BLUEPRINT_RENDER_MISSING"),
+                ("ppt_render_path", "PPT_RENDER_MISSING"),
+                ("side_by_side_comparison_path", "SIDE_BY_SIDE_COMPARISON_MISSING"),
+            )
+            for artifact_field, code in delivery_artifacts:
+                artifact_value = entry.get(artifact_field)
+                if not manifest_ref_exists(artifact_value, visual_qa_dir):
+                    warnings.append(
+                        issue(
+                            code,
+                            f"deliverable_allowed=true requires an existing {artifact_field}.",
+                            slide=slide_number,
+                        )
+                    )
+
+            visual_differences = entry.get("visual_differences")
+            if not isinstance(visual_differences, list):
+                warnings.append(
+                    issue(
+                        "VISUAL_QA_EVIDENCE_MISSING",
+                        "deliverable_allowed=true requires visual_differences to be recorded as a list, even when empty.",
+                        slide=slide_number,
+                    )
+                )
+
+        evidence = entry.get("evidence")
+        if not isinstance(evidence, dict):
+            evidence = {}
+        for field in VISUAL_QA_REQUIRED_FIELDS:
+            if field == "deliverable_allowed" or entry.get(field) is not True:
+                continue
+            field_evidence = evidence.get(field)
+            if field_evidence in (None, "", [], {}):
+                warnings.append(
+                    issue(
+                        "VISUAL_PASS_WITHOUT_EVIDENCE",
+                        f"visual_qa_gate.json field '{field}' is true but has no evidence entry.",
+                        slide=slide_number,
+                    )
+                )
+                continue
+            if isinstance(field_evidence, str) and not manifest_ref_exists(field_evidence, visual_qa_dir):
+                warnings.append(
+                    issue(
+                        "VISUAL_QA_EVIDENCE_FILE_NOT_FOUND",
+                        f"visual_qa_gate.json evidence for '{field}' was not found: {field_evidence}.",
+                        slide=slide_number,
+                    )
+                )
 
     return warnings
 
@@ -1116,7 +1215,8 @@ def validate_pptx(
             ):
                 report["summary"][field] = sum(slide[field] for slide in report["slides"])
 
-            report["warnings"].extend(validate_visual_qa(visual_qa, manifest))
+            visual_qa_dir = Path(visual_qa_path).parent if visual_qa_path is not None else None
+            report["warnings"].extend(validate_visual_qa(visual_qa, manifest, visual_qa_dir))
     except zipfile.BadZipFile:
         report["errors"].append(issue("INVALID_PPTX_ZIP", "File is not a readable PPTX ZIP package."))
     except (ET.ParseError, KeyError, ValueError) as exc:
